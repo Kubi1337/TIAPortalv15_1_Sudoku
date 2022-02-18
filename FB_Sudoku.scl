@@ -1,0 +1,2735 @@
+﻿FUNCTION_BLOCK "FB_Sudoku"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+   VAR 
+      VISU : "ADT_VISU";   // die Verbidung mit der Visualisierung
+      gitter : Array[0..80] of "ADT_Gitter";   // das Feld aktueller und potenziellen Nummer fuer jedes Feldchen im Gitter
+      gitter_geteilt : Array[0..8] of "ADT_Gitter_geteilt";   // die Struktur des Zwichenspeichers der Zeilene, der Säulen, und der Vierecke
+      gitter_ergebnis : Array[0..80] of USInt;   // Zwischenspeicher vom richtigen Ergebnis
+      ergebnis_fehler : Bool;   // Kontrolle die Schleife, ergenbis fehler
+      fehler_code : USInt;   // Kontrolle die Schleife, Fehler code 1: Fehler von Vergliech 2: Fehler keine möglich Nummer
+      wiederholung : USInt;   // Wiederholungzahl wenn fehlt sudoku ergebnis ist
+      fehlt_feldchen_num : SInt;   //  Nummer von Letzte fehlt Feldchen
+      gitter_letzte_num : Array[0..80] of "ADT_Gitter";   // das Feld des Zwichenspeicher Letzte nummer von ein Feldchen
+      zufällig_nummer : USInt;   // Zufällig nummer von SPS Zeit tick
+      länge : SInt;   // Kontrolle die Schleife, dlzka
+      exponent : SInt;   // Kontrolle die Schleife, exponent
+      initial : SInt;   // Kontrolle die Schleife, zaciatok
+      aktualisierung_flanke {InstructionName := 'R_TRIG'; LibVersion := '1.0'} : R_TRIG;   // Positive flanke für aktualisierung flanke
+      static_temp : Struct   // Kontrolle die Schliefe, temp feld zum Verchliech
+         Feld_zeilen { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Array[0..8] of USInt;   // Kontrolle die Schliefe, temp feld zum Verchliech
+         Feld_säulen { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Array[0..8] of USInt;   // Kontrolle die Schliefe, temp feld zum Verchliech
+         Feld_vierecke { ExternalAccessible := 'False'; ExternalVisible := 'False'; ExternalWritable := 'False'} : Array[0..8] of USInt;   // Kontrolle die Schliefe, temp feld zum Verchliech
+      END_STRUCT;
+   END_VAR
+
+   VAR_TEMP 
+      o : SInt;   // Kontrolle die Schleife, index o
+      n : SInt;   // Kontrolle die Schleife, index n
+      m : SInt;   // Kontrolle die Schleife, index m
+      l : SInt;   // Kontrolle die Schleife, index l
+      k : SInt;   // Kontrolle die Schleife, index k
+      j : SInt;   // Kontrolle die Schleife, index j
+      i : SInt;   // Kontrolle die Schleife, index i
+      temp : Struct   // Struct für temporäre Variable
+         Wort : Word;
+         "Bool" : Bool;
+         "Time" : Time;
+         "SInt" : SInt;
+         "USInt" : USInt;
+         "String" : String;
+      END_STRUCT;
+   END_VAR
+
+
+BEGIN
+	REGION Ergebnisdarstellung der generation für Visualisierung
+	    //die Überführung integer auf String für Ergebnisdarstellung in der Visualisierung
+	    FOR #i := 0 TO 80 BY 1 DO
+	        #gitter_ergebnis[#i] := #gitter[#i].nummer;
+	        CASE #gitter_ergebnis[#i] OF
+	            1:
+	                #VISU.gitter[#i] := '1';
+	            2:
+	                #VISU.gitter[#i] := '2';
+	            3:
+	                #VISU.gitter[#i] := '3';
+	            4:
+	                #VISU.gitter[#i] := '4';
+	            5:
+	                #VISU.gitter[#i] := '5';
+	            6:
+	                #VISU.gitter[#i] := '6';
+	            7:
+	                #VISU.gitter[#i] := '7';
+	            8:
+	                #VISU.gitter[#i] := '8';
+	            9:
+	                #VISU.gitter[#i] := '9';
+	            0:
+	                #VISU.gitter[#i] := '';
+	        END_CASE;
+	    END_FOR;
+	END_REGION
+	
+	REGION Programm auf Beschränkung der Möglichkeiten in einzelnen Feldern und korrekt Sudoku ergebnis aufschreiben
+	    REGION Zurücksetzen ganzes Gitters
+	        //Zurücksetzen ganzes Gitters wenn aktualisierung taster gedrückt ist oder ergebnis fehler ist aktiv
+	        //Positive flanke von aktualisierung taste
+	        #aktualisierung_flanke(CLK := #VISU.aktualisierung_taster);
+	        //Zurücksetzen automatisches Wiederholen wenn aktualisierung taster gedrückt ist
+	        IF #aktualisierung_flanke.Q = TRUE THEN
+	            #wiederholung := 0;
+	        END_IF;
+	        IF #aktualisierung_flanke.Q = TRUE OR #ergebnis_fehler = TRUE AND #wiederholung <= 50 THEN
+	            FOR #i := 0 TO 80 BY 1 DO
+	                //Zurücksetzen von alle Nummer, in aktuellen und letzten Nummer Bereich
+	                #gitter[#i].nummer := 0;
+	                #gitter_letzte_num[#i].nummer := 0;
+	                FOR #j := 0 TO 8 BY 1 DO
+	                    //Zurücksetzen von allen Möglichkeiten, in aktuellen und letzten Nummer Bereich
+	                    #gitter[#i].potenz_nummer[#j] := TRUE;
+	                    #gitter_letzte_num[#i].potenz_nummer[#j] := TRUE;
+	                END_FOR;
+	            END_FOR;
+	            //Wiederholungzahl wenn fehlt sudoku ergebnis ist
+	            IF #ergebnis_fehler = TRUE THEN
+	                #wiederholung := #wiederholung + 1;
+	            END_IF;
+	            #ergebnis_fehler := FALSE;
+	        END_IF;
+	    END_REGION
+	    REGION Der generation für korrekt Sudoku ergebnis
+	        //Beginne Programm wenn kein Fehler ergebnis ist aktiv
+	        IF #ergebnis_fehler = FALSE THEN
+	            //die hauptsächliche Schleife
+	            FOR #k := 0 TO 80 BY 1 DO
+	                REGION Zeilen Feld aufschreiben
+	                    //Verteilung ganzes Gitters auf Zeilen
+	                    //Die Schleife läuft allen indexen entsprechender Zeilen durch und schreibt sie ins angegebene Feld auf
+	                    #initial := 0;
+	                    #länge := 8;
+	                    FOR #i := 0 TO 8 BY 1 DO
+	                        #j := 0;
+	                        FOR #o := #initial TO #länge BY 1 DO
+	                            #gitter_geteilt[#i].zeile[#j].nummer := #gitter[#o].nummer;
+	                            FOR #l := 0 TO 8 BY 1 DO
+	                                #gitter_geteilt[#i].zeile[#j].potenz_nummer[#l] := #gitter[#o].potenz_nummer[#l];
+	                            END_FOR;
+	                            #j := #j + 1;
+	                        END_FOR;
+	                        #initial := #initial + 9;
+	                        #länge := #länge + 9;
+	                    END_FOR;
+	                END_REGION
+	                REGION Säulen Feld aufschreiben
+	                    //Verteilung ganzes Gitters auf Säulen
+	                    //Die Schleife läuft allen indexen entschprechender Säulen durch und schreibt sie ins angegebene Feld auf
+	                    #initial := 0;
+	                    FOR #i := 0 TO 8 BY 1 DO
+	                        #j := 0;
+	                        FOR #o := #initial TO 80 BY 9 DO
+	                            #gitter_geteilt[#i].säule[#j].nummer := #gitter[#o].nummer;
+	                            FOR #l := 0 TO 8 BY 1 DO
+	                                #gitter_geteilt[#i].säule[#j].potenz_nummer[#l] := #gitter[#o].potenz_nummer[#l];
+	                            END_FOR;
+	                            #j := #j + 1;
+	                        END_FOR;
+	                        #initial := #initial + 1;
+	                    END_FOR;
+	                END_REGION
+	                REGION Vierecke Feld aufschreiben
+	                    //Verteilung ganzes Gitters auf Vierecke
+	                    //Die Schleife läuft allen idexen entschprechender Vierecke durch und schreibt sie ins angegebene Feld auf
+	                    #initial := 0;
+	                    #länge := 2;
+	                    FOR #i := 0 TO 8 BY 1 DO
+	                        #j := 0;
+	                        FOR #n := 0 TO 2 DO
+	                            IF #n = 0 THEN
+	                                #j := 0;
+	                            ELSIF #n = 1 THEN
+	                                #j := 3;
+	                            ELSIF #n = 2 THEN
+	                                #j := 6;
+	                            END_IF;
+	                            FOR #o := #initial TO #länge BY 1 DO
+	                                #gitter_geteilt[#i].viereck[#j].nummer := #gitter[#o].nummer;
+	                                FOR #l := 0 TO 8 BY 1 DO
+	                                    #gitter_geteilt[#i].viereck[#j].potenz_nummer[#l] := #gitter[#o].potenz_nummer[#l];
+	                                END_FOR;
+	                                #j := #j + 1;
+	                            END_FOR;
+	                            IF #n < 2 THEN
+	                                #initial := #initial + 9;
+	                                #länge := #länge + 9;
+	                            END_IF;
+	                        END_FOR;
+	                        IF #i = 2 OR #i = 5 THEN
+	                            #initial := #initial + 3;
+	                        ELSE
+	                            #initial := (#initial - 18) + 3;
+	                        END_IF;
+	                        #länge := #initial + 2;
+	                    END_FOR;
+	                END_REGION
+	                REGION Korrektheit prüfen, die Schleife beenden und Zufällig nummer generation
+	                    //Beenden die Schleife wenn in einem Bereich von Zeilen, Säulen und Vierecke, die gleiche Nummer ist
+	                    //Zurücksetzen zufälig nummer
+	                    FOR #j := 0 TO 8 BY 1 DO
+	                        //Zurücksetzen temp Feld vor dem Vergleich
+	                        FOR #l := 0 TO 8 BY 1 DO
+	                            #static_temp.Feld_zeilen[#l] := 0;
+	                            #static_temp.Feld_säulen[#l] := 0;
+	                            #static_temp.Feld_vierecke[#l] := 0;
+	                        END_FOR;
+	                        //Vergleich alle Bereich von Zeilen, Säulen und Vierecke, ob in ihnen gleiche Nummer ist
+	                        FOR #l := 0 TO 8 BY 1 DO
+	                            FOR #i := 0 TO 8 BY 1 DO
+	                                REGION Allen Zeilen Vergleich
+	                                    //Vergleich alle Bereich von Zeilen mit den Temp Bereichen
+	                                    IF #gitter_geteilt[#j].zeile[#l].nummer > 0 AND #static_temp.Feld_zeilen[#i] > 0 AND
+	                                        #gitter_geteilt[#j].zeile[#l].nummer <> #static_temp.Feld_zeilen[#i] THEN
+	                                        //Wenn keine Nummer von Temp Bereich ist gleich, aufschreiben die Nummer in den Temp Bereich
+	                                        #gitter_geteilt[#j].zeile[#l].nummer := #static_temp.Feld_zeilen[#i - #l];
+	                                        #ergebnis_fehler := FALSE;
+	                                        #fehler_code := 0;
+	                                    ELSIF #gitter_geteilt[#j].zeile[#l].nummer > 0 AND #static_temp.Feld_zeilen[#i] > 0 AND
+	                                        #gitter_geteilt[#j].zeile[#l].nummer = #static_temp.Feld_zeilen[#i] THEN
+	                                        //Wenn in einem Bereich gleiche Nummer ist, beenden die Schliefe
+	                                        #ergebnis_fehler := TRUE;
+	                                        #fehler_code := 1;
+	                                        EXIT;
+	                                    END_IF;
+	                                END_REGION
+	                                REGION Allen Säulen Vergleich
+	                                    IF #gitter_geteilt[#j].säule[#l].nummer > 0 AND #static_temp.Feld_säulen[#i] > 0 AND
+	                                        #gitter_geteilt[#j].säule[#l].nummer <> #static_temp.Feld_säulen[#i] THEN
+	                                        //Wenn keine Nummer von Temp Bereich ist gleich, aufschreiben die Nummer in den Temp Bereich
+	                                        #gitter_geteilt[#j].säule[#l].nummer := #static_temp.Feld_säulen[#i - #l];
+	                                        #ergebnis_fehler := FALSE;
+	                                        #fehler_code := 0;
+	                                    ELSIF #gitter_geteilt[#j].säule[#l].nummer > 0 AND #static_temp.Feld_säulen[#i] > 0 AND
+	                                        #gitter_geteilt[#j].säule[#l].nummer = #static_temp.Feld_säulen[#i] THEN
+	                                        //Wenn in einem Bereich gleiche Nummer ist, beenden die Schliefe
+	                                        #ergebnis_fehler := TRUE;
+	                                        #fehler_code := 1;
+	                                        EXIT;
+	                                    END_IF;
+	                                END_REGION
+	                                REGION Allen Vierecke Vergleich
+	                                    IF #gitter_geteilt[#j].viereck[#l].nummer > 0 AND #static_temp.Feld_vierecke[#i] > 0 AND
+	                                        #gitter_geteilt[#j].viereck[#l].nummer <> #static_temp.Feld_vierecke[#i] THEN
+	                                        //Wenn keine Nummer von Temp Bereich ist gleich, aufschreiben die Nummer in den Temp Bereich
+	                                        #gitter_geteilt[#j].viereck[#l].nummer := #static_temp.Feld_vierecke[#i - #l];
+	                                        #ergebnis_fehler := FALSE;
+	                                        #fehler_code := 0;
+	                                    ELSIF #gitter_geteilt[#j].viereck[#l].nummer > 0 AND #static_temp.Feld_vierecke[#i] > 0 AND
+	                                        #gitter_geteilt[#j].viereck[#l].nummer = #static_temp.Feld_vierecke[#i] THEN
+	                                        //Wenn in einem Bereich gleiche Nummer ist, beenden die Schliefe
+	                                        #ergebnis_fehler := TRUE;
+	                                        #fehler_code := 1;
+	                                        EXIT;
+	                                    END_IF;
+	                                END_REGION
+	                            END_FOR;
+	                            //Beenden die Schleife wenn fehler ist aktiv
+	                            IF #ergebnis_fehler = TRUE THEN
+	                                EXIT;
+	                            END_IF;
+	                        END_FOR;
+	                    END_FOR;
+	                    //Beenden die Schleife wenn fehler ist aktiv
+	                    IF #ergebnis_fehler = TRUE THEN
+	                        EXIT;
+	                    END_IF;
+	                    //Beenden die Schleife wenn keine mögliche Nummer in das Feldchen ist
+	                    //Wenn ein Nummer ist möglich, zufällig nummer aufschreiben
+	                    IF #gitter[#k].nummer = 0 THEN
+	                        #ergebnis_fehler := TRUE;
+	                        FOR #j := 0 TO 8 BY 1 DO
+	                            IF #gitter[#k].potenz_nummer[#j] = TRUE THEN
+	                                #ergebnis_fehler := FALSE;
+	                                #fehler_code := 0;
+	                                //Zufällig nummer aufschreiben
+	                                #zufällig_nummer := STRING_TO_USINT(RIGHT(IN := USINT_TO_STRING(TIME_TO_USINT(TIME_TCK())), L := 1));
+	                            END_IF;
+	                        END_FOR;
+	                        //Beenden die Schleife wenn fehler ist aktiv
+	                        IF #ergebnis_fehler = TRUE THEN
+	                            #fehler_code := 2;
+	                            #fehlt_feldchen_num := #k;
+	                            EXIT;
+	                        END_IF;
+	                    END_IF;
+	                END_REGION
+	                REGION Ein Nummer und Möglichkeiten aufschreiben
+	                    //Schreiben Nummer in das Feldchen wenn Nummer ist möglich aufschreiben
+	                    IF #zufällig_nummer > 0 AND #m <> #zufällig_nummer AND #gitter[#k].nummer = 0 THEN
+	                        IF #gitter[#k].potenz_nummer[#zufällig_nummer - 1] = TRUE THEN
+	                            #gitter[#k].nummer := #zufällig_nummer;
+	                        END_IF;
+	                    END_IF;
+	                    #m := USINT_TO_SINT(#zufällig_nummer);
+	                    //Beginne Programm beschränkung mögliche Nummer wenn im Feld geschriebene Nummer ist
+	                    IF #gitter[#k].nummer <> #gitter_letzte_num[#k].nummer THEN
+	                        REGION Die Fälle für einzelen Feldchen 
+	                            //Feldchen Möglichkeiten Einstellungen
+	                            CASE #k OF
+	                                    //Feldchen 1
+	                                0:
+	                                    REGION Feldchen 1
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 2
+	                                1:
+	                                    REGION Feldchen 2
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 3
+	                                2:
+	                                    REGION Feldchen 3
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 4
+	                                3:
+	                                    REGION Feldchen 4
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 5
+	                                4:
+	                                    REGION Feldchen 5
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 6
+	                                5:
+	                                    REGION Feldchen 6
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 7
+	                                6:
+	                                    REGION Feldchen 7
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 8
+	                                7:
+	                                    REGION Feldchen 8
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 9
+	                                8:
+	                                    REGION Feldchen 9
+	                                        //Beschränkung mögliche Nummer in der Zeile 1
+	                                        FOR #i := 0 TO 8 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 10
+	                                9:
+	                                    REGION Feldchen 10
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 11
+	                                10:
+	                                    REGION Feldchen 11
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 12
+	                                11:
+	                                    REGION Feldchen 12
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 13
+	                                12:
+	                                    REGION Feldchen 13
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 14
+	                                13:
+	                                    REGION Feldchen 14
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 15
+	                                14:
+	                                    REGION Feldchen 15
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 16
+	                                15:
+	                                    REGION Feldchen 16
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 17
+	                                16:
+	                                    REGION Feldchen 17
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 18
+	                                17:
+	                                    REGION Feldchen 18
+	                                        //Beschränkung mögliche Nummer in der Zeile 2
+	                                        FOR #i := 9 TO 17 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 19
+	                                18:
+	                                    REGION Feldchen 19
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 20
+	                                19:
+	                                    REGION Feldchen 20
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 21
+	                                20:
+	                                    REGION Feldchen 21
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 1
+	                                        #initial := 0;
+	                                        #länge := 2;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 22
+	                                21:
+	                                    REGION Feldchen 22
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 23
+	                                22:
+	                                    REGION Feldchen 23
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 24
+	                                23:
+	                                    REGION Feldchen 24
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 2
+	                                        #initial := 3;
+	                                        #länge := 5;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 25
+	                                24:
+	                                    REGION Feldchen 25
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 26
+	                                25:
+	                                    REGION Feldchen 26
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 27
+	                                26:
+	                                    REGION Feldchen 27
+	                                        //Beschränkung mögliche Nummer in der Zeile 3
+	                                        FOR #i := 18 TO 26 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 3
+	                                        #initial := 6;
+	                                        #länge := 8;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 28
+	                                27:
+	                                    REGION Feldchen 28
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 29
+	                                28:
+	                                    REGION Feldchen 29
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 30
+	                                29:
+	                                    REGION Feldchen 30
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 31
+	                                30:
+	                                    REGION Feldchen 31
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 32
+	                                31:
+	                                    REGION Feldchen 32
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 33
+	                                32:
+	                                    REGION Feldchen 33
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 34
+	                                33:
+	                                    REGION Feldchen 34
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 35
+	                                34:
+	                                    REGION Feldchen 35
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 36
+	                                35:
+	                                    REGION Feldchen 36
+	                                        //Beschränkung mögliche Nummer in der Zeile 4
+	                                        FOR #i := 27 TO 35 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 37
+	                                36:
+	                                    REGION Feldchen 37
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 38
+	                                37:
+	                                    REGION Feldchen 38
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 39
+	                                38:
+	                                    REGION Feldchen 39
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 40
+	                                39:
+	                                    REGION Feldchen 40
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 41
+	                                40:
+	                                    REGION Feldchen 41
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 42
+	                                41:
+	                                    REGION Feldchen 42
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 43
+	                                42:
+	                                    REGION Feldchen 43
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 44
+	                                43:
+	                                    REGION Feldchen 44
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 45
+	                                44:
+	                                    REGION Feldchen 45
+	                                        //Beschränkung mögliche Nummer in der Zeile 5
+	                                        FOR #i := 36 TO 44 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 46
+	                                45:
+	                                    REGION Feldchen 46
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 47
+	                                46:
+	                                    REGION Feldchen 47
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 48
+	                                47:
+	                                    REGION Feldchen 48
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 4
+	                                        #initial := 27;
+	                                        #länge := 29;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 49
+	                                48:
+	                                    REGION Feldchen 49
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 50
+	                                49:
+	                                    REGION Feldchen 50
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 51
+	                                50:
+	                                    REGION Feldchen 51
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 5
+	                                        #initial := 30;
+	                                        #länge := 32;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 52
+	                                51:
+	                                    REGION Feldchen 52
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 53
+	                                52:
+	                                    REGION Feldchen 53
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 54
+	                                53:
+	                                    REGION Feldchen 54
+	                                        //Beschränkung mögliche Nummer in der Zeile 6
+	                                        FOR #i := 45 TO 53 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 6
+	                                        #initial := 33;
+	                                        #länge := 35;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 55
+	                                54:
+	                                    REGION Feldchen 55
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 56
+	                                55:
+	                                    REGION Feldchen 56
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 57
+	                                56:
+	                                    REGION Feldchen 57
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION //Feldchen 57
+	                                    //Feldchen 58
+	                                57:
+	                                    REGION Feldchen 58
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 59
+	                                58:
+	                                    REGION Feldchen 59
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 60
+	                                59:
+	                                    REGION Feldchen 60
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 61
+	                                60:
+	                                    REGION Feldchen 61
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 62
+	                                61:
+	                                    REGION Feldchen 62
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 63
+	                                62:
+	                                    REGION Feldchen 63
+	                                        //Beschränkung mögliche Nummer in der Zeile 7
+	                                        FOR #i := 54 TO 62 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 64
+	                                63:
+	                                    REGION Feldchen 64
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 65
+	                                64:
+	                                    REGION Feldchen 65
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 66
+	                                65:
+	                                    REGION Feldchen 66
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 67
+	                                66:
+	                                    REGION Feldchen 67
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 68
+	                                67:
+	                                    REGION Feldchen 68
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 69
+	                                68:
+	                                    REGION Feldchen 69
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 70
+	                                69:
+	                                    REGION Feldchen 70
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 71
+	                                70:
+	                                    REGION Feldchen 71
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 72
+	                                71:
+	                                    REGION Feldchen 72
+	                                        //Beschränkung mögliche Nummer in der Zeile 8
+	                                        FOR #i := 63 TO 71 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 73
+	                                72:
+	                                    REGION Feldchen 73
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 1
+	                                        FOR #i := 0 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 74
+	                                73:
+	                                    REGION Feldchen 74
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 2
+	                                        FOR #i := 1 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 75
+	                                74:
+	                                    REGION Feldchen 75
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 3
+	                                        FOR #i := 2 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 7
+	                                        #initial := 54;
+	                                        #länge := 56;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 76
+	                                75:
+	                                    REGION Feldchen 76
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 4
+	                                        FOR #i := 3 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 77
+	                                76:
+	                                    REGION Feldchen 77
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 5
+	                                        FOR #i := 4 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 78
+	                                77:
+	                                    REGION Feldchen 78
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 6
+	                                        FOR #i := 5 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 8
+	                                        #initial := 57;
+	                                        #länge := 59;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 79
+	                                78:
+	                                    REGION Feldchen 79
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 7
+	                                        FOR #i := 6 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 80
+	                                79:
+	                                    REGION Feldchen 80
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 8
+	                                        FOR #i := 7 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                                    //Feldchen 81
+	                                80:
+	                                    REGION Feldchen 81
+	                                        //Beschränkung mögliche Nummer in der Zeile 9
+	                                        FOR #i := 72 TO 80 BY 1 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in der Säule 9
+	                                        FOR #i := 8 TO 80 BY 9 DO
+	                                            IF #gitter[#k].nummer > 0 THEN
+	                                                #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                            END_IF;
+	                                        END_FOR;
+	                                        //Beschränkung mögliche Nummer in dem Viereck 9
+	                                        #initial := 60;
+	                                        #länge := 62;
+	                                        FOR #m := 0 TO 2 BY 1 DO
+	                                            FOR #i := #initial TO #länge BY 1 DO
+	                                                IF #gitter[#k].nummer > 0 THEN
+	                                                    #gitter[#i].potenz_nummer[#gitter[#k].nummer - 1] := FALSE;
+	                                                END_IF;
+	                                            END_FOR;
+	                                            IF #m < 2 THEN
+	                                                #initial := #initial + 9;
+	                                                #länge := #länge + 9;
+	                                            END_IF;
+	                                        END_FOR;
+	                                    END_REGION
+	                            END_CASE;
+	                        END_REGION
+	                    END_IF;
+	                END_REGION
+	                REGION Letze Nummer und Möglichkeiten Feld aufschreiben
+	                    //Letze Nummer und Möglichkeiten Feld nach jeder Schleife aufschreiben
+	                    FOR #i := 0 TO 80 BY 1 DO
+	                        #gitter_letzte_num[#i].nummer := #gitter[#i].nummer;
+	                        FOR #j := 0 TO 8 BY 1 DO
+	                            #gitter_letzte_num[#i].potenz_nummer[#j] := #gitter[#i].potenz_nummer[#j];
+	                        END_FOR;
+	                    END_FOR;
+	                END_REGION
+	            END_FOR;
+	        END_IF;
+	    END_REGION
+	END_REGION
+	
+	            
+	    
+	
+	
+	
+	
+	
+END_FUNCTION_BLOCK
+

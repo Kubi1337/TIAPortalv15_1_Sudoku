@@ -1,0 +1,10 @@
+﻿TYPE "ADT_Gitter_geteilt"
+VERSION : 0.1
+   STRUCT
+      zeile : Array[0..8] of "ADT_Gitter";
+      säule : Array[0..8] of "ADT_Gitter";
+      viereck : Array[0..8] of "ADT_Gitter";
+   END_STRUCT;
+
+END_TYPE
+

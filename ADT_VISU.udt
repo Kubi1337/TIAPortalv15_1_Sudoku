@@ -1,0 +1,9 @@
+﻿TYPE "ADT_VISU"
+VERSION : 0.1
+   STRUCT
+      gitter : Array[0..80] of String;   // String feld für Verbindung mit der Visualisierung
+      aktualisierung_taster : Bool;   // Taste für Aktualisierung der Aufgabenstellung Sudoku
+   END_STRUCT;
+
+END_TYPE
+

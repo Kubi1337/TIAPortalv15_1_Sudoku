@@ -1,0 +1,10 @@
+﻿TYPE "ADT_Gitter"
+VERSION : 0.1
+//ADT  možných a aktualnych čísel pre každe políčko v gride
+   STRUCT
+      nummer : USInt;   // nummer in einem Feldchen
+      potenz_nummer : Array[0..8] of Bool := 9(true);   // das Feld der potenziellen Nummer für ein Feldchen
+   END_STRUCT;
+
+END_TYPE
+
