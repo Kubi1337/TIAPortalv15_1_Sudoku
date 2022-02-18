@@ -1,0 +1,3 @@
+V0.1
+Generation and filling sudoku grid with proper ruleset is working, and its able to refresh it from Visu and see results there also. 
+Algorythm is not complete, I need to add more properties for ruleset. There is no correct result generated yet with this ruleset.
